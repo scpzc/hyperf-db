@@ -1,0 +1,20 @@
+{
+    "name": "scpzc/hyperf-db",
+    "description": "hyperf数据库操作助手",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "scpzc",
+            "email": "335760480@qq.com"
+        }
+    ],
+    "minimum-stability": "stable",
+    "require": {
+        "php": ">=7.4.0"
+    },
+    "autoload": {
+    "psr-4": {
+        "Scpzc\\HyperfDb\\": "src/"
+    }
+}
+}
