@@ -355,7 +355,7 @@ class DbCore
      * @throws \Exception
      */
     private function selectOperate($where, $params, $fields, $selectType){
-        if($fields == 'count(*)'){
+        if($fields == 'count(*)' && is_string($where)){
             $where = preg_replace('#SELECT(.*?)FROM#is','SELECT count(*) FROM',$where);
         }
         $sqlLower = '';
