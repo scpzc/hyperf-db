@@ -11,6 +11,7 @@ use Psr\Container\ContainerInterface;
 use Psr\EventDispatcher\EventDispatcherInterface;
 use Scpzc\HyperfDb\Event\FailToExecute;
 
+
 class DbCore
 {
 
@@ -32,7 +33,7 @@ class DbCore
     private $debug = 0; //是否开启调试模式,如果开启将不运行，直接输出sql语句
 
     /**
-     * @var \Psr\Container\ContainerInterface
+     * @var ContainerInterface
      */
     protected $container;
 
@@ -41,7 +42,7 @@ class DbCore
      * @var null|EventDispatcherInterface
      */
     protected $dispatcher;
-    
+
 
     public function __construct($name)
     {
@@ -203,37 +204,101 @@ class DbCore
     }
 
 
+    /**
+     * 处理params针对 IN这种，传的是一个数组
+     * author: scpzc
+     * date: 2022/3/3 9:23
+     * @param $params
+     */
+    private function params($params){
+        foreach($params as $field => $paramItem){
+            if(is_array($paramItem)){
+                $tempKeys = [];
+                foreach($paramItem as $key=>$param){
+                    $tempKeys[] = ":".$field."_".$key;
+                    $params[$field."_".$key] = $param;
+                }
+                unset($params[$field]);
+                $this->sql = str_replace(":".$field,join(",",$tempKeys),$this->sql);
+            }
+        }
+        return $params;
+    }
 
 
     /**
-     * 数据处理
+     * 插入数据处理
      * @param $dataArray    //要操作的数据
-     * @param $dataType   //数据类型1新增  2修改
      * @return $this
      * @throws \Exception
      */
-    private function data($dataArray,$dataType){
+    private function insertData($dataArray){
         if(empty($dataArray)){
             throw new \Exception('data参数不能为空');
         }
-        if($dataType == 1){  //新增
-            $insertFields = [];
-            foreach($dataArray as $dataKey=>$dataValue) {
-                $insertFields[] = $dataKey;
-                $this->params['data_'.$dataKey] = $dataValue;
-                $this->operateData['insert_data'] = ' ( `' . join('`,`', $insertFields) . '` ) VALUES (:data_' . join(',:data_', $insertFields) . ')';
+        $batchData = is_array($dataArray[0]??null)?$dataArray:[$dataArray];
+        $insertValues = [];
+        foreach($batchData as $dataKey1=>$data){
+            $dataKeys = [];
+            foreach($data as $dataKey2=>$dataValue) {
+                $dataKey = 'data_'.$dataKey1.'_'.$dataKey2;  //参数KEY
+                $dataKeys[] = ':'.$dataKey;   //绑定KEY
+                $this->params[$dataKey] = $dataValue;
             }
-        }elseif($dataType == 2){ //修改
-            $updateFields = [];
-            foreach($dataArray as $dataKey=>$dataValue){
-                $updateFields[] = '`'.$dataKey.'` = :'.'data_'.$dataKey;  //要更新的字段
-                $this->params['data_'.$dataKey] = $dataValue;  //要更新的参数
-                $this->operateData['update_data'] = ' SET '.join(',',$updateFields);  //要更新的字段拼接成字符串
-            }
+            $insertValues[] = '(' . join(',', $dataKeys) . ')';
         }
+        //插入的字段
+        $insertFields = array_keys($batchData[0]);
+        $this->operateData['insert_data'] = ' ( `' . join('`,`', $insertFields) . '` ) VALUES '.join(',',$insertValues);
         return $this;
     }
 
+
+
+    /**
+     * 更新的数据处理
+     * @param $dataArray    //要操作的数据
+     * @return $this
+     * @throws \Exception
+     */
+    private function updateData($dataArray){
+        if(empty($dataArray)){
+            throw new \Exception('data参数不能为空');
+        }
+        $updateFields = [];
+        foreach($dataArray as $dataKey=>$dataValue){
+            $updateFields[] = '`'.$dataKey.'` = :'.'data_'.$dataKey;  //要更新的字段
+            $this->params['data_'.$dataKey] = $dataValue;  //要更新的参数
+        }
+        $this->operateData['update_data'] = ' SET '.join(',',$updateFields);  //要更新的字段拼接成字符串
+        return $this;
+    }
+
+    /**
+     * 分页获取数据
+     * @param $pageSize  //每页取的条数
+     * @param callable $callback  //回调
+     */
+    public function chunk($pageSize, callable $callback){
+        $page = 1;
+        do{
+            $operateData = $this->operateData;
+            $runParams = $this->params;
+            if(empty($operateData['order_by'])){
+                throw new \Exception('请先使用order排序');
+            }
+            $result = $this->fetchByPage(null,null,null,$page,$pageSize);
+            $resultCount = count($result['list']);
+            if(empty($resultCount)) break;
+            $callback($result['list'],$result['page']);
+            unset($result);
+            $page++;
+            $this->operateData = $operateData;
+            $this->params = $runParams;
+        }while($resultCount == $pageSize);
+        $this->resetParams();
+
+    }
 
     /**
      * 获取单个值，可以使用原生
@@ -299,22 +364,24 @@ class DbCore
      * @param int $pageSize 每页的记录数
      * @return array
      */
-    public function fetchByPage($where = null, $params = [], $fields = '',$page = 1,$pageSize = 10){
+    public function fetchByPage($where = null, $params = [], $fields = '',$page = 1,$pageSize = 20){
         $page = (int) $page;
         $pageSize = (int) $pageSize;
-        if(empty($page)) throw new \Exception('page不能为空');
-        if(empty($pageSize)) throw new \Exception('page_size不能为空');
+        if(empty($page)) $page = 1;
+        if(empty($pageSize)) $pageSize = 20;
         $operateData = $this->operateData;
         $runParams = $this->params;
-        $totalCount = $this->fetchOne($where,$params,'count(*)');
+        $totalCount = $this->fetchOne($where,$params??[],'count(*)');
+        $totalPage = ceil($totalCount / $pageSize);
+        $page = max(min($totalPage,$page),1);
         $this->operateData = $operateData;
         $this->params = $runParams;
         //使用原生查询
         if(is_string($where) && strpos(strtoupper($where),'SELECT') !== false ) $where.= ' LIMIT '.($page-1)*$pageSize.','.$pageSize;
-        $list = $this->limit(($page-1)*$pageSize,$pageSize)->fetchAll($where,$params,$fields);
+        $list = $this->limit(($page-1)*$pageSize,$pageSize)->fetchAll($where,$params??[],$fields??'');
         return [
             'total_count' => $totalCount,  //总记录
-            'total_page'  => ceil($totalCount / $pageSize),  //总页数
+            'total_page'  => $totalPage,  //总页数
             'page'        => $page,   //当前页
             'page_size'   => $pageSize,  //每页条数
             'list'        => $list,  //查出的数据
@@ -374,7 +441,7 @@ class DbCore
                 strpos($sqlLower, 'show') === 0
             )) {
             $this->sql    = $where;
-            $this->params = $params;
+            $this->params = $this->params($params);
         }else{
             //sqlOrWhere是where条件如['id'=>1]、'id = :id'
             $this->where($where,$params);
@@ -422,7 +489,7 @@ class DbCore
      * @return int
      */
     public function insert($data = []){
-        $this->data($data,1);
+        $this->insertData($data);
         try{
             $this->sql = 'INSERT INTO'.$this->operateData['table'].$this->operateData['insert_data'];
             $this->sqlAndParams[] = ['sql'=>$this->sql,'params'=>$this->params];
@@ -445,7 +512,7 @@ class DbCore
      * @return int|mixed
      */
     public function update($data = [],$where = null, $params = []){
-        $this->data($data,2);
+        $this->updateData($data);
         $this->where($where,$params);
         if(empty($this->operateData['where'])) throw new \Exception('where条件不能为空');
         try{
@@ -487,8 +554,10 @@ class DbCore
                     $result = !empty($result) ? $this->objectToArray($result) : [];
                     break;
                 case 'INSERT':
-                    $this->db->insert($sql, $params);
-                    $result = $this->db->getPdo()->lastInsertId();
+                    //如果是批量插入，返回影响行数
+                    $result = $this->db->affectingStatement($sql, $params);
+                    //如果是插入一条，直接返回ID
+                    if($result == 1) $result = $this->db->getPdo()->lastInsertId();
                     break;
                 case 'UPDATE':
                     $result = $this->db->update($sql, $params);
@@ -513,6 +582,7 @@ class DbCore
         foreach($this->sqlAndParams as $key=>$item){
             $sqlAndParams = $item['sql'];
             if(!empty($item['params'])){
+                $item['params'] = array_reverse($item['params']);
                 foreach($item['params'] as $paramKey=>$paramValue){
                     $sqlAndParams = str_replace(':'.$paramKey,"'".$paramValue."'",$sqlAndParams);
                 }
