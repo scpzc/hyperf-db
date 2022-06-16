@@ -441,6 +441,7 @@ class DbCore
                 strpos($sqlLower, 'show') === 0
             )) {
             $this->sql = $where;
+            $this->params = $params;
         }else{
             //sqlOrWhere是where条件如['id'=>1]、'id = :id'
             $this->where($where,$params);
