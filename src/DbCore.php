@@ -206,13 +206,11 @@ class DbCore
 
     /**
      * 处理params针对 IN这种，传的是一个数组
-     * author: scpzc
-     * date: 2022/3/3 9:23
      * @param $params
      */
     private function params($params){
         foreach($params as $field => $paramItem){
-            if(is_array($paramItem)){
+            if(is_array($paramItem) && !empty($paramItem)){ //有值的数组
                 $tempKeys = [];
                 foreach($paramItem as $key=>$param){
                     $tempKeys[] = ":".$field."_".$key;
@@ -220,6 +218,8 @@ class DbCore
                 }
                 unset($params[$field]);
                 $this->sql = str_replace(":".$field,join(",",$tempKeys),$this->sql);
+            }elseif(is_array($paramItem) && empty($paramItem)){   //空数组
+                $params[$field] = null;
             }
         }
         return $params;
@@ -440,7 +440,7 @@ class DbCore
                 strpos($sqlLower, 'select') === 0 ||
                 strpos($sqlLower, 'show') === 0
             )) {
-            $this->sql = $where;
+            $this->sql    = $where;
             $this->params = $params;
         }else{
             //sqlOrWhere是where条件如['id'=>1]、'id = :id'
@@ -585,7 +585,11 @@ class DbCore
             if(!empty($item['params'])){
                 $item['params'] = array_reverse($item['params']);
                 foreach($item['params'] as $paramKey=>$paramValue){
-                    $sqlAndParams = str_replace(':'.$paramKey,"'".$paramValue."'",$sqlAndParams);
+                    if(is_null($paramValue)){
+                        $sqlAndParams = str_replace(':'.$paramKey,"null",$sqlAndParams);
+                    }else{
+                        $sqlAndParams = str_replace(':'.$paramKey,"'".$paramValue."'",$sqlAndParams);
+                    }
                 }
             }
             if(!in_array($item['sql'],['begin transaction','commit','rollback'])){
